@@ -67,7 +67,7 @@ target_compile_definitions(${PROJECT_NAME}
 
 # JUCE libraries to bring into our project
 target_link_libraries(${PROJECT_NAME}
-        PUBLIC
+        PRIVATE
         juce::juce_analytics
         juce::juce_audio_basics
         juce::juce_audio_devices
@@ -78,6 +78,7 @@ target_link_libraries(${PROJECT_NAME}
         juce::juce_gui_extra
         juce::juce_audio_utils
         juce::juce_dsp
+        PUBLIC
         juce::juce_recommended_config_flags
         juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags

@@ -110,9 +110,9 @@ jobs:
           vst_binary="build/WhisperASMR_artefacts/Release/VST3/Whisper ASMR.vst3/Contents/MacOS/Whisper ASMR"
           app_binary="build/WhisperASMR_artefacts/Release/Standalone/Whisper ASMR.app/Contents/MacOS/Whisper ASMR"
 
-          lipo -verify_arch x86_64 arm64 "${au_binary}"
-          lipo -verify_arch x86_64 arm64 "${vst_binary}"
-          lipo -verify_arch x86_64 arm64 "${app_binary}"
+          lipo "${au_binary}" -verify_arch x86_64 arm64
+          lipo "${vst_binary}" -verify_arch x86_64 arm64
+          lipo "${app_binary}" -verify_arch x86_64 arm64
           codesign --force --deep --sign - "${au_bundle}"
           codesign --force --deep --sign - "${vst_bundle}"
           codesign --force --deep --sign - "${app_bundle}"
