@@ -1,0 +1,166 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: Version component to increment
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: whisper-asmr-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build and publish macOS release
+    runs-on: macos-15-intel
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out selected branch
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Require a branch
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" != "branch" ]]; then
+            echo "Run this workflow from a branch so the version commit can be pushed."
+            exit 1
+          fi
+
+      - name: Calculate and apply version
+        id: version
+        shell: bash
+        env:
+          RELEASE_TYPE: ${{ inputs.release_type }}
+        run: |
+          current="$(sed -nE 's/^project\(WhisperASMR VERSION ([0-9]+\.[0-9]+\.[0-9]+)\)$/\1/p' CMakeLists.txt)"
+
+          if [[ -z "${current}" ]]; then
+            echo "Could not read the WhisperASMR version from CMakeLists.txt."
+            exit 1
+          fi
+
+          IFS=. read -r major minor patch <<< "${current}"
+          case "${RELEASE_TYPE}" in
+            major)
+              major=$((major + 1)); minor=0; patch=0
+              ;;
+            minor)
+              minor=$((minor + 1)); patch=0
+              ;;
+            patch)
+              patch=$((patch + 1))
+              ;;
+            *)
+              echo "Unsupported release type: ${RELEASE_TYPE}"
+              exit 1
+              ;;
+          esac
+
+          next="${major}.${minor}.${patch}"
+          tag="v${next}"
+
+          if git rev-parse --quiet --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists."
+            exit 1
+          fi
+
+          CURRENT_VERSION="${current}" NEXT_VERSION="${next}" perl -0pi -e \
+            's/project\(WhisperASMR VERSION \Q$ENV{CURRENT_VERSION}\E\)/project(WhisperASMR VERSION $ENV{NEXT_VERSION})/' \
+            CMakeLists.txt
+
+          grep -Fqx "project(WhisperASMR VERSION ${next})" CMakeLists.txt
+          echo "current=${current}" >> "${GITHUB_OUTPUT}"
+          echo "version=${next}" >> "${GITHUB_OUTPUT}"
+          echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
+
+      - name: Configure universal macOS build
+        run: |
+          cmake -S . -B build -G Xcode \
+            -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
+            -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO
+
+      - name: Build AU, VST3, and Standalone
+        run: |
+          cmake --build build \
+            --config Release \
+            --target WhisperASMR_AU WhisperASMR_VST3 WhisperASMR_Standalone \
+            --parallel 4
+
+      - name: Sign and validate builds
+        shell: bash
+        run: |
+          au_bundle="build/WhisperASMR_artefacts/Release/AU/Whisper ASMR.component"
+          vst_bundle="build/WhisperASMR_artefacts/Release/VST3/Whisper ASMR.vst3"
+          app_bundle="build/WhisperASMR_artefacts/Release/Standalone/Whisper ASMR.app"
+          au_binary="build/WhisperASMR_artefacts/Release/AU/Whisper ASMR.component/Contents/MacOS/Whisper ASMR"
+          vst_binary="build/WhisperASMR_artefacts/Release/VST3/Whisper ASMR.vst3/Contents/MacOS/Whisper ASMR"
+          app_binary="build/WhisperASMR_artefacts/Release/Standalone/Whisper ASMR.app/Contents/MacOS/Whisper ASMR"
+
+          lipo -verify_arch x86_64 arm64 "${au_binary}"
+          lipo -verify_arch x86_64 arm64 "${vst_binary}"
+          lipo -verify_arch x86_64 arm64 "${app_binary}"
+          codesign --force --deep --sign - "${au_bundle}"
+          codesign --force --deep --sign - "${vst_bundle}"
+          codesign --force --deep --sign - "${app_bundle}"
+          codesign --verify --deep --strict "${au_bundle}"
+          codesign --verify --deep --strict "${vst_bundle}"
+          codesign --verify --deep --strict "${app_bundle}"
+          xcrun auval -v aufx Asm1 Whsp
+
+      - name: Package release assets
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/WhisperASMR_artefacts/Release/AU/Whisper ASMR.component" \
+            "dist/Whisper-ASMR-v${VERSION}-AU-macOS-universal.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/WhisperASMR_artefacts/Release/VST3/Whisper ASMR.vst3" \
+            "dist/Whisper-ASMR-v${VERSION}-VST3-macOS-universal.zip"
+          ditto -c -k --sequesterRsrc --keepParent \
+            "build/WhisperASMR_artefacts/Release/Standalone/Whisper ASMR.app" \
+            "dist/Whisper-ASMR-v${VERSION}-Standalone-macOS-universal.zip"
+          cd dist
+          shasum -a 256 ./*.zip > SHA256SUMS.txt
+
+      - name: Commit version and push tag
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CMakeLists.txt
+          git commit -m "chore: release ${TAG}"
+          git tag -a "${TAG}" -m "Whisper ASMR ${VERSION}"
+          git push --atomic origin "HEAD:refs/heads/${BRANCH}" "refs/tags/${TAG}"
+
+      - name: Create GitHub Release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          gh release create "${TAG}" ./dist/* \
+            --verify-tag \
+            --title "Whisper ASMR ${VERSION}" \
+            --generate-notes
