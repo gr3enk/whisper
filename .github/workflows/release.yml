@@ -87,16 +87,16 @@ jobs:
           echo "version=${next}" >> "${GITHUB_OUTPUT}"
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
 
-      - name: Configure universal macOS build
+      - name: Configure universal macOS build with Ninja
         run: |
-          cmake -S . -B build -G Xcode \
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
             -DCMAKE_OSX_ARCHITECTURES="x86_64;arm64" \
-            -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0
 
       - name: Build AU, VST3, and Standalone
         run: |
           cmake --build build \
-            --config Release \
             --target WhisperASMR_AU WhisperASMR_VST3 WhisperASMR_Standalone \
             --parallel 4
 
