@@ -119,7 +119,34 @@ jobs:
           codesign --verify --deep --strict "${au_bundle}"
           codesign --verify --deep --strict "${vst_bundle}"
           codesign --verify --deep --strict "${app_bundle}"
-          xcrun auval -v aufx Asm1 Whsp
+
+          # auval discovers AUv2 plug-ins through AudioComponentRegistrar, not
+          # directly from the build directory. Install the final signed bundle
+          # and restart the registrar so a fresh CI runner sees it reliably.
+          component_directory="${HOME}/Library/Audio/Plug-Ins/Components"
+          installed_au="${component_directory}/Whisper ASMR.component"
+          mkdir -p "${component_directory}"
+          rm -rf "${installed_au}"
+          ditto "${au_bundle}" "${installed_au}"
+          touch "${component_directory}"
+
+          validated=false
+          for attempt in 1 2 3; do
+            killall -9 AudioComponentRegistrar 2>/dev/null || true
+            sleep $((attempt * 2))
+
+            if xcrun auval -v aufx Asm1 Whsp; then
+              validated=true
+              break
+            fi
+
+            echo "AU registration attempt ${attempt} failed; retrying."
+          done
+
+          if [[ "${validated}" != "true" ]]; then
+            echo "The Audio Unit could not be registered and validated after three attempts."
+            exit 1
+          fi
 
       - name: Package release assets
         shell: bash
